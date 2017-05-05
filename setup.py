@@ -41,6 +41,7 @@ install_requires = [
     'dockerpty >= 0.4.1, < 0.5',
     'six >= 1.3.0, < 2',
     'jsonschema >= 2.5.1, < 3',
+    'zerorpc == 0.6.1'
 ]
 
 
