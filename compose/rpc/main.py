@@ -13,49 +13,97 @@ from ..utils import json_hash
 from tempfile import TemporaryDirectory
 from docker.auth import resolve_repository_name
 from docker import APIClient
+from docker.tls import TLSConfig
 from threading import Thread
+from os import environ
+from os import path
 
 import yaml
 import requests
 import zerorpc
 import re
 
-def get_client(host="", tls_config=None, timeout=None, user_agent=""):
-  if timeout:
-      tout = int(timeout)
-  else:
-      tout = HTTP_TIMEOUT
+# https://github.com/docker/docker-py/blob/469b12a3c59ec344b7aaeebde05512387f5488b3/docker/utils/utils.py#L409
+def client_kwargs(host="", ssl_version=None, assert_hostname=None, environment=None):
+  params = {
+    "version": "1.21",
+    "user_agent": "docker-compose-api"
+  }
 
-  return APIClient(
-    base_url=host,
-    version="1.21",
-    timeout=tout,
-    tls=tls_config,
-    user_agent=user_agent
+  if not environment:
+      environment = environ
+
+  # empty string for cert path is the same as unset.
+  cert_path = environment.get("DOCKER_CERT_PATH") or None
+
+  # empty string for tls verify counts as "false".
+  # Any value or "unset" counts as true.
+  tls_verify = environment.get("DOCKER_TLS_VERIFY")
+  if tls_verify == "":
+      tls_verify = False
+  else:
+      tls_verify = tls_verify is not None
+  enable_tls = cert_path or tls_verify
+
+  timeout = environment.get("COMPOSE_HTTP_TIMEOUT") or environment.get("DOCKER_CLIENT_TIMEOUT")
+  if timeout:
+      params["timeout"] = int(timeout)
+  else:
+      params["timeout"] = HTTP_TIMEOUT
+
+  if host:
+      params["base_url"] = (
+          host.replace("tcp://", "https://") if enable_tls else host
+      )
+
+  if not enable_tls:
+      return params
+
+  if not cert_path:
+      cert_path = path.join(path.expanduser("~"), ".docker")
+
+  if not tls_verify and assert_hostname is None:
+      # assert_hostname is a subset of TLS verification,
+      # so if it's not set already then set it to false.
+      assert_hostname = False
+
+  params["tls"] = TLSConfig(
+      client_cert=(path.join(cert_path, "cert.pem"),
+                   path.join(cert_path, "key.pem")),
+      ca_cert=path.join(cert_path, "ca.pem"),
+      verify=tls_verify,
+      ssl_version=ssl_version,
+      assert_hostname=assert_hostname,
   )
+
+  return params
+
+def get_client(host="", environment=None):
+  return APIClient(**client_kwargs(
+    host=host,
+    ssl_version=None,
+    assert_hostname=None,
+    environment=environment
+  ))
 
 def get_config_details(manifest=""):
   return ConfigDetails(
-      TemporaryDirectory().name,
-      [ConfigFile(None, yaml.safe_load(manifest))],
-      None
+    TemporaryDirectory().name,
+    [ConfigFile(None, yaml.safe_load(manifest))],
+    None
   )
 
-def get_project(project_name=None, manifest="", verbose=True,
-                host=None, tls_config=None, environment=None):
+def get_project(project_name=None, manifest="", host=None, environment=None):
+  config_details = get_config_details(manifest=manifest)
+  config_data = config.load(config_details=config_details)
 
-    config_details = get_config_details(manifest)
-    config_data = config.load(config_details)
+  client = get_client(
+    host=host,
+    environment=environment
+  )
 
-    client = get_client(
-      host=host,
-      tls_config=tls_config,
-      timeout=None,
-      user_agent=None
-    )
-
-    with errors.handle_connection_errors(client):
-        return Project.from_config(project_name, config_data, client)
+  with errors.handle_connection_errors(client):
+    return Project.from_config(name=project_name, config_data=config_data, client=client)
 
 def run_in_thread(target=None, args=()):
   thread = Thread(target=target, args=args)
@@ -95,61 +143,58 @@ def get_image_id_v2(registry="index.docker.io", repo_name=None, tag="latest"):
   return r_id.json().get("config").get("digest")
 
 def get_image_id(name):
-  repository, tag, separator = parse_repository_tag(name)
-  registry, repo_name = resolve_repository_name(repository)
+  repository, tag, separator = parse_repository_tag(repo_path=name)
+  registry, repo_name = resolve_repository_name(repo_name=repository)
 
   ping = requests.get("http://index.{}/v2".format(registry))
   Id = None
 
   if ping.status_code == 404:
-    Id = get_image_id_v1(registry, repo_name, tag)
+    Id = get_image_id_v1(registry=registry, repo_name=repo_name, tag=tag)
   else:
-    Id = get_image_id_v2(registry, repo_name, tag)
+    Id = get_image_id_v2(registry=registry, repo_name=repo_name, tag=tag)
 
   return Id
 
-def config_dict(service, image_id):
-    return {
-        "options": service.options,
-        "image_id": image_id,
-        "links": service.get_link_names(),
-        "net": service.network_mode.id,
-        "networks": service.networks,
-        "volumes_from": [
-            (v.source.name, v.mode)
-            for v in service.volumes_from if isinstance(v.source, Service)
-        ]
-    }
+def config_dict(service=None, image_id=""):
+  return {
+    "options": service.options,
+    "image_id": image_id,
+    "links": service.get_link_names(),
+    "net": service.network_mode.id,
+    "networks": service.networks,
+    "volumes_from": [
+      (v.source.name, v.mode)
+      for v in service.volumes_from if isinstance(v.source, Service)
+    ]
+  }
 
 class TopLevelCommand(object):
-  def up(self, options, manifest=""):
-    start_deps = True
-    detached = True
-    remove_orphans = True
-    # exit_value_from = None
-    # cascade_stop = False
-    service_names = []
-    timeout = None
-    environment = {}
-    host = None # "http+docker:///var/run/docker.sock" # project.host
-    tree = {}
+  def ping(self):
+    return "Hello from docker-compose"
+
+  def up(self, options=None, manifest=""):
+    environment = (options.get("environment") or {})
+    environment.update(environ)
+
+    host = (options.get("host") or environment.get("DOCKER_HOST"))
 
     project = get_project(
-      options.get("project_name"),
-      manifest,
-      True,
-      host,
-      None, # tls_config_from_options(options),
-      environment
+      project_name=options.get("project_name"),
+      manifest=manifest,
+      host=host,
+      environment=environment
     )
+
+    tree = {}
 
     for service in project.get_services():
       try:
-        image_id = service.image()['Id']
+        image_id = service.image()["Id"]
       except:
-        image_id = get_image_id(service.options["image"])
+        image_id = get_image_id(name=service.options["image"])
 
-      meta = config_dict(service, image_id)
+      meta = config_dict(service=service, image_id=image_id)
       convergence_plan = service.convergence_plan()
 
       plan = {
@@ -165,7 +210,7 @@ class TopLevelCommand(object):
 
       tree[service.name] = {
         "plan": plan,
-        "hash": json_hash(meta),
+        "hash": json_hash(obj=meta),
         "meta": meta,
         "dependencies": service.get_dependency_names(),
         "links": service.get_linked_service_names(),
@@ -173,13 +218,13 @@ class TopLevelCommand(object):
       }
 
     run_in_thread(target=project.up, args=(
-      service_names,
-      start_deps,
-      ConvergenceStrategy.changed,
-      BuildAction.none,
-      timeout,
-      detached,
-      remove_orphans
+      [], # service_names
+      True, # start_deps
+      ConvergenceStrategy.changed, # strategy
+      BuildAction.none, # do_build
+      options.get("timeout"), # timeout
+      True, # detached
+      True # remove_orphans
     ))
 
     return tree
@@ -188,3 +233,5 @@ def main():
   server = zerorpc.Server(TopLevelCommand())
   server.bind("tcp://0.0.0.0:4242")
   server.run()
+
+  print("RPC Server listenting tcp://0.0.0.0:4242")

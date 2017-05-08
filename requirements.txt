@@ -14,3 +14,4 @@ requests==2.11.1
 six==1.10.0
 texttable==0.8.4
 websocket-client==0.32.0
+zerorpc==0.6.1
