@@ -5,10 +5,12 @@ from ..service import Service
 from .. import config
 from ..config.config import ConfigDetails
 from ..config.config import ConfigFile
+from ..config.serialize import denormalize_config
 from ..const import HTTP_TIMEOUT
 from ..cli import errors
 from ..project import Project
 from ..utils import json_hash
+from ..cli.main import image_digests_for_project
 
 from tempfile import TemporaryDirectory
 from docker.auth import resolve_repository_name
@@ -22,6 +24,8 @@ import yaml
 import requests
 import zerorpc
 import re
+
+
 
 # https://github.com/docker/docker-py/blob/469b12a3c59ec344b7aaeebde05512387f5488b3/docker/utils/utils.py#L409
 def client_kwargs(host="", ssl_version=None, assert_hostname=None, environment=None):
@@ -78,6 +82,7 @@ def client_kwargs(host="", ssl_version=None, assert_hostname=None, environment=N
 
   return params
 
+
 def get_client(host="", environment=None):
   return APIClient(**client_kwargs(
     host=host,
@@ -86,17 +91,21 @@ def get_client(host="", environment=None):
     environment=environment
   ))
 
-def get_config_details(manifest=""):
+
+def get_config_details(manifest="", environment=None):
   return ConfigDetails(
     TemporaryDirectory().name,
     [ConfigFile(None, yaml.safe_load(manifest))],
-    None
+    environment
   )
 
-def get_project(project_name=None, manifest="", host=None, environment=None):
-  config_details = get_config_details(manifest=manifest)
-  config_data = config.load(config_details=config_details)
 
+def get_config_data(manifest="", environment=None):
+  config_details = get_config_details(manifest=manifest, environment=environment)
+  return config.load(config_details=config_details)
+
+
+def get_project(project_name=None, manifest="", host=None, config_data=None, environment=None):
   client = get_client(
     host=host,
     environment=environment
@@ -105,10 +114,12 @@ def get_project(project_name=None, manifest="", host=None, environment=None):
   with errors.handle_connection_errors(client):
     return Project.from_config(name=project_name, config_data=config_data, client=client)
 
+
 def run_in_thread(target=None, args=()):
   thread = Thread(target=target, args=args)
   thread.daemon = True
   thread.start()
+
 
 # v1
 # https://registry.hub.docker.com/v1/repositories/nodered/node-red-docker/tags/latest
@@ -120,6 +131,7 @@ def get_image_id_v1(registry="index.docker.io", repo_name=None, tag="latest"):
   r_id = requests.get("https://index.{}//v1/repositories/{}/tags/{}".format(registry, repo_name, tag))
 
   return r_id.text
+
 
 # v2
 # token = $(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo_name}:pull" | jq -r .token)
@@ -142,6 +154,7 @@ def get_image_id_v2(registry="index.docker.io", repo_name=None, tag="latest"):
 
   return r_id.json().get("config").get("digest")
 
+
 def get_image_id(name):
   repository, tag, separator = parse_repository_tag(repo_path=name)
   registry, repo_name = resolve_repository_name(repo_name=repository)
@@ -156,6 +169,7 @@ def get_image_id(name):
 
   return Id
 
+
 def config_dict(service=None, image_id=""):
   return {
     "options": service.options,
@@ -169,20 +183,68 @@ def config_dict(service=None, image_id=""):
     ]
   }
 
+
+def get_environment(options_env=None):
+  environment = (options_env or {})
+  environment.update(environ)
+  return environment
+
+
+def get_host(options=None, environment=None):
+  return options.get("host") or environment.get("DOCKER_HOST")
+
+
 class TopLevelCommand(object):
   def ping(self):
     return "Hello from docker-compose"
 
-  def up(self, options=None, manifest=""):
-    environment = (options.get("environment") or {})
-    environment.update(environ)
+  def config(self, options=None, manifest=""):
+    environment = get_environment(options_env=options.get("environment"))
+    config_data = get_config_data(manifest=manifest, environment=environment)
+    image_digests = None
+    services = []
+    volumes = []
 
-    host = (options.get("host") or environment.get("DOCKER_HOST"))
+    if options.get('resolve_image_digests'):
+      host = get_host(options=options, environment=environment)
+      image_digests = image_digests_for_project(get_project(
+        project_name=options.get("project_name"),
+        manifest=manifest,
+        host=host,
+        config_data=config_data,
+        environment=environment
+      ))
+
+    if options.get('quiet'):
+      return
+
+    if options.get('services'):
+      for service in config_data.services:
+        services.append(service['name'])
+
+    if options.get('volumes'):
+      for volume in config_data.volumes:
+        volumes.append(volume)
+
+    if options.get('services') or options.get('volumes'):
+      return {
+        "volumes": volumes,
+        "services": services
+      };
+
+    return denormalize_config(config=config_data, image_digests=image_digests)
+
+
+  def up(self, options=None, manifest=""):
+    environment = get_environment(options_env=options.get("environment"))
+    host = get_host(options=options, environment=environment)
+    config_data = get_config_data(manifest=manifest, environment=environment)
 
     project = get_project(
       project_name=options.get("project_name"),
       manifest=manifest,
       host=host,
+      config_data=config_data,
       environment=environment
     )
 
@@ -228,6 +290,28 @@ class TopLevelCommand(object):
     ))
 
     return tree
+
+  def scale(self, options=None, manifest=""):
+    environment = get_environment(options_env=options.get("environment"))
+    host = get_host(options=options, environment=environment)
+    config_data = get_config_data(manifest=manifest, environment=environment)
+
+    project = get_project(
+      project_name=options.get("project_name"),
+      manifest=manifest,
+      host=host,
+      config_data=config_data,
+      environment=environment
+    )
+
+    def do(service=None, num=0):
+      service.scale(desired_num=num)
+
+    for service in options.get("services"):
+      run_in_thread(target=do, args=(
+        project.get_service(service.get("name")), # service_name
+        service.get("num"), # num
+      ))
 
 def main():
   server = zerorpc.Server(TopLevelCommand())
