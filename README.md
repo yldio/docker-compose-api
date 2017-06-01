@@ -1,5 +1,20 @@
 # Docker Compose API
 
+## build
+
+```
+docker build -t docker-compose-api . 
+```
+
+## run
+
+**local**:
+
+```
+docker run -p 4242:4242 -d docker-compose-api
+```
+
+**remote**:
 ```
 docker run \
 -v "/local/path/to/docker/cert":"/usr/src/cert" \
@@ -9,5 +24,5 @@ docker run \
 -e COMPOSE_HTTP_TIMEOUT=300 \
 -p 4242:4242 \
 -d \
-docker-compose
+docker-compose-api
 ```
