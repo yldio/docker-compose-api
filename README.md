@@ -26,3 +26,9 @@ docker run \
 -d \
 docker-compose-api
 ```
+
+**without docker**:
+
+```
+DOCKER_CERT_PATH="/Users/ramitos/.triton/docker/raoulmillais@us-sw-1_api_joyent_com" DOCKER_HOST="http://us-sw-1.docker.joyent.com:2376" python3 bin/docker-compose
+```
