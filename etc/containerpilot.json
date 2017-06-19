@@ -1,9 +1,14 @@
 {
   "consul": "0.0.0.0:4242",
-  "services": [
+  "jobs": [
     {
       "name": "container-pilot-api",
-      "port": 4242
+      "port": 4242,
+      "health": {
+        "exec": "echo 0",
+        "interval": 2,
+        "ttl": 5
+      }
     }
   ]
 }
