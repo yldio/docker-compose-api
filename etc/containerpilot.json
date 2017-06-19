@@ -1,0 +1,9 @@
+{
+  "consul": "0.0.0.0:4242",
+  "services": [
+    {
+      "name": "container-pilot-api",
+      "port": 4242
+    }
+  ]
+}
