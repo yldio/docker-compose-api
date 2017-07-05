@@ -3,6 +3,8 @@ from ..service import ConvergenceStrategy
 from ..service import parse_repository_tag
 from ..service import Service
 from .. import config
+from ..config.environment import Environment
+from ..config.environment import split_env
 from ..config.config import ConfigDetails
 from ..config.config import ConfigFile
 from ..config.serialize import denormalize_config
@@ -184,8 +186,17 @@ def config_dict(service=None, image_id=""):
   }
 
 
-def get_environment(options_env=None):
-  environment = (options_env or {})
+def get_environment(options_env=""):
+  env = {}
+
+  if options_env is not None:
+    for line in options_env.splitlines():
+      line = line.strip()
+      if line and not line.startswith('#'):
+          k, v = split_env(line)
+          env[k] = v
+
+  environment = Environment(env);
   environment.update(environ)
   return environment
 
@@ -315,7 +326,7 @@ class TopLevelCommand(object):
 
 def main():
   server = zerorpc.Server(TopLevelCommand())
-  server.bind("tcp://0.0.0.0:4242")
-  server.run()
 
+  server.bind("tcp://0.0.0.0:4242")
   print("RPC Server listenting tcp://0.0.0.0:4242")
+  server.run()
