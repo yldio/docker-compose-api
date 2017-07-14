@@ -18,7 +18,7 @@ from ..const import COMPOSEFILE_V1 as V1
 from ..utils import build_string_dict
 from ..utils import parse_nanoseconds_int
 from ..utils import splitdrive
-from .environment import env_vars_from_file
+from .environment import env_vars_from_env_files
 from .environment import Environment
 from .environment import split_env
 from .errors import CircularReference
@@ -130,20 +130,22 @@ DEFAULT_OVERRIDE_FILENAME = 'docker-compose.override.yml'
 log = logging.getLogger(__name__)
 
 
-class ConfigDetails(namedtuple('_ConfigDetails', 'working_dir config_files environment')):
+class ConfigDetails(namedtuple('_ConfigDetails', 'working_dir config_files env_files environment')):
     """
     :param working_dir: the directory to use for relative paths in the config
     :type  working_dir: string
     :param config_files: list of configuration files to load
     :type  config_files: list of :class:`ConfigFile`
+    :param env_files: kv of filename->str for enviroment files
+    :type  env_files: dict
     :param environment: computed environment values for this project
     :type  environment: :class:`environment.Environment`
      """
-    def __new__(cls, working_dir, config_files, environment=None):
+    def __new__(cls, working_dir, config_files, env_files, environment=None):
         if environment is None:
             environment = Environment.from_env_file(working_dir)
         return super(ConfigDetails, cls).__new__(
-            cls, working_dir, config_files, environment
+            cls, working_dir, config_files, env_files, environment
         )
 
 
@@ -430,6 +432,7 @@ def load_services(config_details, config_file):
             service_config,
             service_names,
             config_file.version,
+            config_details.env_files,
             config_details.environment)
         return service_dict
 
@@ -592,13 +595,13 @@ class ServiceExtendsResolver(object):
         return filename
 
 
-def resolve_environment(service_dict, environment=None):
+def resolve_environment(service_dict, env_files=None, environment=None):
     """Unpack any environment variables from an env_file, if set.
     Interpolate environment values if set.
     """
     env = {}
     for env_file in service_dict.get('env_file', []):
-        env.update(env_vars_from_file(env_file))
+        env.update(env_vars_from_env_files(env_file, env_files))
 
     env.update(parse_environment(service_dict.get('environment')))
     return dict(resolve_env_var(k, v, environment) for k, v in six.iteritems(env))
@@ -659,7 +662,7 @@ def process_service(service_config):
 
     if 'env_file' in service_dict:
         service_dict['env_file'] = [
-            expand_path(working_dir, path)
+            dont_expand_path(working_dir, path)
             for path in to_list(service_dict['env_file'])
         ]
 
@@ -750,11 +753,11 @@ def process_healthcheck(service_dict, service_name):
     return service_dict
 
 
-def finalize_service(service_config, service_names, version, environment):
+def finalize_service(service_config, service_names, version, env_files, environment):
     service_dict = dict(service_config.config)
 
     if 'environment' in service_dict or 'env_file' in service_dict:
-        service_dict['environment'] = resolve_environment(service_dict, environment)
+        service_dict['environment'] = resolve_environment(service_dict, env_files, environment)
         service_dict.pop('env_file', None)
 
     if 'volumes_from' in service_dict:
@@ -1147,6 +1150,9 @@ def join_path_mapping(pair):
 
 def expand_path(working_dir, path):
     return os.path.abspath(os.path.join(working_dir, os.path.expanduser(path)))
+
+def dont_expand_path(working_dir, path):
+    return path
 
 
 def merge_list_or_string(base, override):

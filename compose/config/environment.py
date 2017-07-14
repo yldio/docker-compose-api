@@ -40,6 +40,26 @@ def env_vars_from_file(filename):
                 env[k] = v
     return env
 
+def env_vars_from_env_files(filename, env_files):
+    """
+    Read in a line delimited file of environment variables.
+    """
+    env = {}
+
+    if not env_files:
+        return env
+
+    if not env_files[filename]:
+        return env
+
+    for line in env_files[filename].splitlines():
+        line = line.strip()
+        if line and not line.startswith('#'):
+            k, v = split_env(line)
+            env[k] = v
+
+    return env
+
 
 class Environment(dict):
     def __init__(self, *args, **kwargs):

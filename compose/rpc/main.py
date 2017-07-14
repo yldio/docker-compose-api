@@ -94,16 +94,17 @@ def get_client(host="", environment=None):
   ))
 
 
-def get_config_details(manifest="", environment=None):
+def get_config_details(manifest="", env_files=None, environment=None):
   return ConfigDetails(
     TemporaryDirectory().name,
     [ConfigFile(None, yaml.safe_load(manifest))],
+    env_files,
     environment
   )
 
 
-def get_config_data(manifest="", environment=None):
-  config_details = get_config_details(manifest=manifest, environment=environment)
+def get_config_data(manifest="", env_files=None, environment=None):
+  config_details = get_config_details(manifest=manifest, env_files=env_files, environment=environment)
   return config.load(config_details=config_details)
 
 
@@ -211,7 +212,7 @@ class TopLevelCommand(object):
 
   def config(self, options=None, manifest=""):
     environment = get_environment(options_env=options.get("environment"))
-    config_data = get_config_data(manifest=manifest, environment=environment)
+    config_data = get_config_data(manifest=manifest, env_files=options.get("files"), environment=environment)
     image_digests = None
     services = []
     volumes = []
@@ -249,7 +250,7 @@ class TopLevelCommand(object):
   def up(self, options=None, manifest=""):
     environment = get_environment(options_env=options.get("environment"))
     host = get_host(options=options, environment=environment)
-    config_data = get_config_data(manifest=manifest, environment=environment)
+    config_data = get_config_data(manifest=manifest, env_files=options.get("files"), environment=environment)
 
     project = get_project(
       project_name=options.get("project_name"),
@@ -265,7 +266,10 @@ class TopLevelCommand(object):
       try:
         image_id = service.image()["Id"]
       except:
-        image_id = get_image_id(name=service.options["image"])
+        try:
+          image_id = get_image_id(name=service.options["image"])
+        except:
+          image_id = ""
 
       meta = config_dict(service=service, image_id=image_id)
       convergence_plan = service.convergence_plan()
@@ -305,7 +309,7 @@ class TopLevelCommand(object):
   def scale(self, options=None, manifest=""):
     environment = get_environment(options_env=options.get("environment"))
     host = get_host(options=options, environment=environment)
-    config_data = get_config_data(manifest=manifest, environment=environment)
+    config_data = get_config_data(manifest=manifest, env_files=options.get("files"), environment=environment)
 
     project = get_project(
       project_name=options.get("project_name"),
