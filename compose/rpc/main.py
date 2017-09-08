@@ -108,7 +108,7 @@ def get_config_data(manifest="", env_files=None, environment=None):
   return config.load(config_details=config_details)
 
 
-def get_project(project_name=None, manifest="", host=None, config_data=None, environment=None):
+def get_project(project_name=None, host=None, config_data=None, environment=None):
   client = get_client(
     host=host,
     environment=environment
@@ -221,7 +221,6 @@ class TopLevelCommand(object):
       host = get_host(options=options, environment=environment)
       image_digests = image_digests_for_project(get_project(
         project_name=options.get("project_name"),
-        manifest=manifest,
         host=host,
         config_data=config_data,
         environment=environment
@@ -254,7 +253,6 @@ class TopLevelCommand(object):
 
     project = get_project(
       project_name=options.get("project_name"),
-      manifest=manifest,
       host=host,
       config_data=config_data,
       environment=environment
@@ -313,7 +311,6 @@ class TopLevelCommand(object):
 
     project = get_project(
       project_name=options.get("project_name"),
-      manifest=manifest,
       host=host,
       config_data=config_data,
       environment=environment
